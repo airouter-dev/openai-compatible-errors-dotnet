@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AiRouter.OpenAICompatibleErrors/AiRouter.OpenAICompatibleErrors.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AiRouter.OpenAICompatibleErrors.Tests/AiRouter.OpenAICompatibleErrors.Tests.csproj" />
+    <Project Path="tests/AiRouter.OpenAICompatibleErrors.NetStandardAsset.Tests/AiRouter.OpenAICompatibleErrors.NetStandardAsset.Tests.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/BasicUsage/BasicUsage.csproj" />
+  </Folder>
+</Solution>

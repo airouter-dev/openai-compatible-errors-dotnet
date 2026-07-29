@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net8.0</TargetFrameworks>
+    <AssemblyName>AiRouter.OpenAICompatibleErrors</AssemblyName>
+    <RootNamespace>AiRouter.OpenAICompatibleErrors</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>AiRouter.OpenAICompatibleErrors</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>AI ROUTER</Authors>
+    <Company>AI ROUTER</Company>
+    <Copyright>Copyright (c) 2026 AI ROUTER</Copyright>
+    <Description>Body-free HTTP error normalization and conservative retry planning for OpenAI-compatible .NET clients. The library never sends, sleeps, logs, or retries a request.</Description>
+    <PackageTags>openai-compatible;http;retry;resilience;streaming;security</PackageTags>
+    <PackageProjectUrl>https://github.com/airouter-dev/openai-compatible-errors-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/airouter-dev/openai-compatible-errors-dotnet.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>package-icon.png</PackageIcon>
+    <PackageReleaseNotes>Initial release: body-free response and exception normalization, bounded Retry-After handling, conservative replay-aware retry plans, and a monotonic streaming evidence tracker.</PackageReleaseNotes>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageOutputPath>$(MSBuildThisFileDirectory)..\..\artifacts\packages</PackageOutputPath>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <DebugType>portable</DebugType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <EnablePackageValidation>true</EnablePackageValidation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\assets\package-icon.png" Pack="true" PackagePath="\" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.301" PrivateAssets="All" />
+  </ItemGroup>
+</Project>

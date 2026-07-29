@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned .NET SDKs
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.423
+            10.0.302
+
+      - name: Restore locked dependencies
+        run: dotnet restore AiRouter.OpenAICompatibleErrors.slnx --locked-mode
+
+      - name: Build with analyzers
+        run: dotnet build AiRouter.OpenAICompatibleErrors.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Run all target and asset tests
+        run: dotnet test AiRouter.OpenAICompatibleErrors.slnx -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Run the compiled example
+        run: dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release --no-build
+
+  package:
+    name: Pack and inspect
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned .NET SDKs
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.423
+            10.0.302
+
+      - name: Restore and build from locked inputs
+        run: |
+          dotnet restore AiRouter.OpenAICompatibleErrors.slnx --locked-mode
+          dotnet build AiRouter.OpenAICompatibleErrors.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Pack release artifacts
+        run: dotnet pack src/AiRouter.OpenAICompatibleErrors/AiRouter.OpenAICompatibleErrors.csproj -c Release --no-build
+
+      - name: Verify package allowlists and metadata
+        run: ./eng/verify-package.sh
+
+      - name: Install the packed nupkg in fresh consumers
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/local-package-cache
+        run: |
+          dotnet restore eng/PackageConsumer/PackageConsumer.csproj --configfile eng/PackageConsumer/NuGet.Config --no-cache
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj -c Release -f net8.0 --no-restore
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj -c Release -f net10.0 --no-restore
+
+      - name: Upload inspected packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NuGet-packages
+          path: artifacts/packages/*.*nupkg
+          if-no-files-found: error
+          retention-days: 14

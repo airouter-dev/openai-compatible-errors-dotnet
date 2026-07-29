@@ -1,0 +1,254 @@
+name: Publish NuGet package
+
+on:
+  push:
+    tags:
+      - v*.*.*
+
+concurrency:
+  group: nuget-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build immutable release bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Require a verified signed annotated tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}")"
+          test "$(jq -r '.object.type' <<<"${ref_json}")" = "tag"
+          tag_sha="$(jq -r '.object.sha' <<<"${ref_json}")"
+          tag_json="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_sha}")"
+          test "$(jq -r '.verification.verified' <<<"${tag_json}")" = "true"
+          test "$(jq -r '.object.type' <<<"${tag_json}")" = "commit"
+          test "$(jq -r '.object.sha' <<<"${tag_json}")" = "${GITHUB_SHA}"
+
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned .NET SDKs
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.423
+            10.0.302
+
+      - name: Require tag and project versions to match
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(dotnet msbuild src/AiRouter.OpenAICompatibleErrors/AiRouter.OpenAICompatibleErrors.csproj -getProperty:Version -nologo | tail -n 1 | tr -d '\r')"
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "${project_version}" = "${tag_version}"
+
+      - name: Restore locked dependencies
+        run: dotnet restore AiRouter.OpenAICompatibleErrors.slnx --locked-mode
+
+      - name: Build with analyzers
+        run: dotnet build AiRouter.OpenAICompatibleErrors.slnx -c Release --no-restore -p:ContinuousIntegrationBuild=true
+
+      - name: Run all target and asset tests
+        run: dotnet test AiRouter.OpenAICompatibleErrors.slnx -c Release --no-build --logger "console;verbosity=normal"
+
+      - name: Run the compiled example
+        run: dotnet run --project samples/BasicUsage/BasicUsage.csproj -c Release --no-build
+
+      - name: Pack release artifacts
+        run: dotnet pack src/AiRouter.OpenAICompatibleErrors/AiRouter.OpenAICompatibleErrors.csproj -c Release --no-build
+
+      - name: Verify package allowlists and metadata
+        env:
+          PACKAGE_VERSION: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          PACKAGE_VERSION="${PACKAGE_VERSION#v}" ./eng/verify-package.sh
+
+      - name: Install the packed nupkg in fresh consumers
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/local-package-cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dotnet restore eng/PackageConsumer/PackageConsumer.csproj \
+            --configfile eng/PackageConsumer/NuGet.Config \
+            --no-cache \
+            -p:ConsumerPackageVersion="${version}"
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj \
+            -c Release -f net8.0 --no-restore \
+            -p:ConsumerPackageVersion="${version}"
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj \
+            -c Release -f net10.0 --no-restore \
+            -p:ConsumerPackageVersion="${version}"
+
+      - name: Write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cd artifacts/packages
+          sha256sum \
+            "AiRouter.OpenAICompatibleErrors.${version}.nupkg" \
+            "AiRouter.OpenAICompatibleErrors.${version}.snupkg" \
+            > SHA256SUMS.txt
+
+      - name: Upload immutable release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: NuGet-release-${{ github.ref_name }}
+          path: |
+            artifacts/packages/*.*nupkg
+            artifacts/packages/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    name: Attest and publish with short-lived credentials
+    needs: build
+    runs-on: ubuntu-latest
+    environment: nuget
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Install pinned .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Download immutable release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: NuGet-release-${{ github.ref_name }}
+          path: release-bundle
+
+      - name: Verify downloaded checksums
+        working-directory: release-bundle
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Attest package provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: |
+            release-bundle/*.*nupkg
+            release-bundle/SHA256SUMS.txt
+
+      - name: Obtain a short-lived NuGet key through OIDC
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Publish package and symbols exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dotnet nuget push \
+            "release-bundle/AiRouter.OpenAICompatibleErrors.${version}.nupkg" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json
+
+  github-release:
+    name: Publish GitHub release evidence
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download immutable release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: NuGet-release-${{ github.ref_name }}
+          path: release-bundle
+
+      - name: Verify downloaded checksums
+        working-directory: release-bundle
+        run: sha256sum --check SHA256SUMS.txt
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "${GITHUB_REF_NAME}" \
+            "release-bundle/AiRouter.OpenAICompatibleErrors.${version}.nupkg" \
+            "release-bundle/AiRouter.OpenAICompatibleErrors.${version}.snupkg" \
+            release-bundle/SHA256SUMS.txt \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME} — conservative .NET retry planning" \
+            --generate-notes
+
+  verify-public:
+    name: Verify NuGet.org consumers
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out consumer fixture
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned .NET SDKs
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: |
+            8.0.423
+            10.0.302
+
+      - name: Wait for NuGet.org indexing
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          package_url="https://api.nuget.org/v3-flatcontainer/airouter.openaicompatibleerrors/${version}/airouter.openaicompatibleerrors.${version}.nupkg"
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --show-error --output /dev/null "${package_url}"; then
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "NuGet.org did not expose the package within ten minutes." >&2
+          exit 1
+
+      - name: Restore and run fresh NuGet.org consumers
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/nuget-org-package-cache
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          dotnet restore eng/PackageConsumer/PackageConsumer.csproj \
+            --configfile eng/PackageConsumer/NuGet.org.Config \
+            --no-cache \
+            -p:ConsumerPackageVersion="${version}"
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj \
+            -c Release -f net8.0 --no-restore \
+            -p:ConsumerPackageVersion="${version}"
+          dotnet run --project eng/PackageConsumer/PackageConsumer.csproj \
+            -c Release -f net10.0 --no-restore \
+            -p:ConsumerPackageVersion="${version}"

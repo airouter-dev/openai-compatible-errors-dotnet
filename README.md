@@ -1,5 +1,7 @@
 # AiRouter.OpenAICompatibleErrors
 
+[![CI](https://github.com/airouter-dev/openai-compatible-errors-dotnet/actions/workflows/ci.yml/badge.svg)](https://github.com/airouter-dev/openai-compatible-errors-dotnet/actions/workflows/ci.yml)
+
 Body-free HTTP error normalization and conservative retry planning for OpenAI-compatible .NET clients.
 
 The package turns bounded BCL metadata into a small provider-neutral error model, then returns one of three decisions: `Retry`, `DoNotRetry`, or `ManualDecision`. It never sends a request, sleeps, logs, reads a response body, or replays an operation.
